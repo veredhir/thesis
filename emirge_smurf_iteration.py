@@ -378,8 +378,8 @@ class EmirgeIteration(object):
                 reads_and_refs_chunk_df['Score'] = np.bitwise_or(np.bitwise_or(a, c), np.bitwise_or(g, t))
                 reads_and_refs_chunk_df['Score'] = reads_and_refs_chunk_df['Score'].apply(lambda r: popcount(r))
 
-                reads_and_refs_chunk_df = reads_and_refs_chunk_df[reads_and_refs_chunk_df['Score'] ==
-                                                            reads_and_refs_chunk_df.groupby(HeadersFormat.Group_id)['Score'].transform(max)]
+                reads_and_refs_chunk_df = reads_and_refs_chunk_df[reads_and_refs_chunk_df['Score'] >=
+                                                                  (reads_and_refs_chunk_df.groupby(HeadersFormat.Group_id)['Score'].transform(max)- 2)]
                 dfs.append(reads_and_refs_chunk_df)
 
             logging.info("Done scoring chunks")
@@ -387,14 +387,12 @@ class EmirgeIteration(object):
             max_scores_series = reads_and_refs_df.groupby(HeadersFormat.Group_id)['Score'].transform(max)
             reads_and_refs_df = reads_and_refs_df[(reads_and_refs_df['Score'] == max_scores_series )]
 
-            # Find to how many refs each read group was mapped(approximate)
-            reads_and_refs_df[MappingForamt.Mapp_weight] = 1/reads_and_refs_df.groupby(HeadersFormat.Group_id)[MappingForamt.Count].transform('count').apply(float)
-
             rename_base_dict = {}
             for base in Base.all:
                 rename_base_dict.update({base + '_y': base}) # keep only the reads bases
 
             reads_and_refs_df.rename(columns=rename_base_dict, inplace=True)
+            reads_and_refs_df[MappingForamt.Mapp_weight] = 0
             reads_and_refs_df = reads_and_refs_df[MappingForamt.full_header]
             mapping_dfs.append(reads_and_refs_df)
 
@@ -402,6 +400,10 @@ class EmirgeIteration(object):
 
         mapping_df = pd.concat(mapping_dfs)
         mapping_df = self.merge_similar_mapped_reference(mapping_df.copy(), ref_df_copy)
+
+        # Find to how many refs each read group was mapped(approximate)
+        mapping_df[MappingForamt.Mapp_weight] = 1 / mapping_df.groupby(HeadersFormat.Group_id)[
+            MappingForamt.Count].transform('count').apply(float)
 
         if abs((sum(unique_reads_df.Count) - int(sum(mapping_df.Count*mapping_df.Mapp_weight)))) > 1:
             raise Exception("MAPPING ERROR: the count is wrong! unique_reads = {}, counter = {}".format(sum(unique_reads_df.Count), sum(mapping_df.Count*mapping_df.Mapp_weight)))
@@ -462,7 +464,6 @@ class EmirgeIteration(object):
 
         mapping_df.rename(columns={ReferenceFormat.Ref_Id: ReferenceFormat.Original_Id}, inplace=True)
         mapping_df = mapping_df.merge(ref_id_to_original_id, on=ReferenceFormat.Original_Id, how='left')
-        mapping_df[MappingForamt.Mapp_weight] = mapping_df.groupby([MappingForamt.Ref_id, MappingForamt.Region, MappingForamt.Group_id])[MappingForamt.Mapp_weight].transform('sum')
         mapping_df.drop_duplicates([MappingForamt.Region, MappingForamt.Ref_id, MappingForamt.Group_id], inplace=True)
         return mapping_df[MappingForamt.full_header]
 

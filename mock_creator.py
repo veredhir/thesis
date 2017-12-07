@@ -9,6 +9,8 @@ import pandas as pd
 from random import randint
 import shutil
 
+from emirge_utills import *
+
 
 class Base(object):
     A = 'A'
@@ -184,7 +186,7 @@ def create_mock_bacterium(bacterium_frequencies,
                           bacterium_to_change,
                           regions_to_change,
                           bases_to_change,
-                          keep_original=False):
+                          keep_original):
     fasta_files = get_fasta_files(fasta_dir, total_num_of_regions)
     bacterias_ids = pick_random_bacterias(fasta_files[0].path, len(bacterium_frequencies))
     bacterium =[]
@@ -192,7 +194,7 @@ def create_mock_bacterium(bacterium_frequencies,
         if bacterium_to_change > 0:
             bacteria = MockBacterium(bacterias_ids[i], bacterium_frequencies[i], read_length, total_amount_of_reads_per_region, bases_to_change, regions_to_change)
             bacterium_to_change -= 1
-            if keep_original:
+            if keep_original > 0:
                 print "Keeping original bacteria {}. changed frequency = {}, original frequency = {}".format(bacterias_ids[i],
                                                                                                              bacterium_frequencies[i],
                                                                                                              bacterium_frequencies[i+1])
@@ -200,6 +202,7 @@ def create_mock_bacterium(bacterium_frequencies,
                 original_bacteria.initialize(fasta_files)
                 bacterium.append(original_bacteria)
                 i += 1
+                keep_original -= 1
         else:
             bacteria = MockBacterium(bacterias_ids[i], bacterium_frequencies[i], read_length, total_amount_of_reads_per_region)
         bacteria.initialize(fasta_files)
@@ -212,7 +215,8 @@ def create_mock_bacterium(bacterium_frequencies,
 def write_bacterium_to_fastq(mock_bacterium,
                              base_fastq_path,
                              mock_fastq_path1,
-                             mock_fastq_path2):
+                             mock_fastq_path2,
+                             zero_error):
     reads = []
     paired_reads = []
     for bacteria in mock_bacterium:
@@ -230,6 +234,13 @@ def write_bacterium_to_fastq(mock_bacterium,
                         mock_fastq1.write(reads[read_ix] + '\n')
                         mock_fastq2.write(paired_reads[read_ix] + '\n')
                         read_ix += 1
+                    elif fastq_ix % 4 == 3:
+                            if zero_error:
+                                mock_fastq1.write((len(line) - 1) * 'z' + '\n')
+                                mock_fastq2.write((len(line) - 1) * 'z' + '\n')
+                            else:
+                                mock_fastq1.write(line)
+                                mock_fastq2.write(line)
                     else:
                         mock_fastq1.write(line)
                         mock_fastq2.write(line)
@@ -320,20 +331,21 @@ def create_mock_reads_directory(mock_reads_dir):
     os.mkdir(mock_reads_dir)
 
 
-def create_mock_reads(fasta_directory="/home/vered/EMIRGE/EMIRGE-data/",
-                      mock_reads_dir='/home/vered/EMIRGE/EMIRGE-data/mock_reads/keep_original_1_change_each_region/',
-                      base_fastq="/home/vered/EMIRGE/EMIRGE-data/RDB53_CATTGACG_L007_R1_001.fastq",
-                      total_number_of_bacterias=15,
-                      min_frequency=0.5,
-                      keep_original=True,
-                      sort_frequency=False,
-                      bacterium_to_change=1,
-                      regions_to_change=1,
-                      bases_to_change=1,
-                      total_amout_of_reads = 130000
+def create_mock_reads(fasta_directory,
+                      mock_reads_dir,
+                      base_fastq,
+                      total_number_of_bacterias,
+                      min_frequency,
+                      keep_original,
+                      sort_frequency,
+                      bacterium_to_change,
+                      regions_to_change,
+                      bases_to_change,
+                      total_amout_of_reads,
+                      zero_error
                       ):
     """
-    using the full fasta DB as reference
+    using the full fasta DB as reference,
     :return:
     # """
 
@@ -365,15 +377,8 @@ def create_mock_reads(fasta_directory="/home/vered/EMIRGE/EMIRGE-data/",
                                            keep_original=keep_original)
 
     write_bacterium_to_fasta(mock_bacterium, mock_fa1, mock_fa2, min_frequency)
-    write_bacterium_to_fastq(mock_bacterium, base_fastq, mock_fastq1, mock_fastq2)
+    write_bacterium_to_fastq(mock_bacterium, base_fastq, mock_fastq1, mock_fastq2, zero_error)
     write_mock_bacterium_to_csv(mock_bacterium, expected_data_path)
-
-
-def create_mock_refs():
-    old_fasta_path = '/home/vered/EMIRGE/EMIRGE-data/'
-    new_fasta_path = '/home/vered/EMIRGE/EMIRGE-data/mock_fasta/'
-    amount = 5000
-    create_mock_fasta(old_fasta_path, new_fasta_path, amount)
 
 
 def get_pair(seq):
@@ -462,40 +467,103 @@ def randomreads_to_emrige_input(fastq, fixed_fastq, fastq1_path, fastq2_path, re
     split_fastq_with_errors(fixed_fastq, fastq1_path, fastq2_path)
 
 
-def parse_arguments(argv = sys.argv[1:]):
+def get_command_line_arguments_parser():
     """
     command line interface to emirge
 
     """
-    parser = OptionParser("create mock data")
+    USAGE = \
+        """usage: %prog FASTA_DIR WORKING_DIR FASTQ_PATH WORKING_DIR SIZE[options]
+
+        Create mock bacteria mixture of mock reference based on reference db (FASTA_DIR)
+        The mock will be store in WORKING_DIR, and will contain SIZE reads\ references
+        """
+
+    parser = OptionParser(USAGE)
 
     # REQUIRED
-    group_reqd = OptionGroup(parser, "Required flags",
+    group_opt = OptionGroup(parser, "Optional flags",
                              "These flags are all required to run EMIRGE, and may be supplied in any order.")
-
-    group_reqd.add_option("-f", dest="fasta_directory",
-                      type="string",
-                      help="path to the directory contain fasta file for each region")
-    group_reqd.add_option("-m", dest="mock_reads_directory",
-                      type="string",
-                      help="path to the directory that will contain the results fastq\fa files")
-    group_reqd.add_option("-r", dest="base_fastq_path",
-                          type="string",
+    group_opt.add_option("-f", dest="fastq_path",
+                          type="string", default=None,
                           help="path to the fastq file that will serve as reference fastq for the mock fastq")
-    group_reqd.add_option("-f", dest="total_number_of_bacterias",
-                      type="int",
-                      help="total number of bacterias in the mixure")
-    parser.add_option_group(group_reqd)
-    (options, args) = parser.parse_args(argv)
-    return options
+    group_opt.add_option("--cb", dest="changed_bacteria_amount",
+                         type="int", default=0,
+                         help="amount of changed bacteria in the mixture [default: %default]")
+    group_opt.add_option("--cbs", dest="changed_bases_amount",
+                         type="int", default=0,
+                         help="amount of changed based per region [default: %default]")
+    group_opt.add_option("--cr", dest="changed_regions",
+                         type="int", default=5,
+                         help="amount of changed region in each changed bacteria [default: %default]")
+    group_opt.add_option("-k", dest="keep_original",
+                         type="int", default=0,
+                         help="keep the original bacteria, for #keep_original bacterias [default: %default]")
+    group_opt.add_option("-r", dest="create_mock_reference",
+                         action="store_true", default=False,
+                         help="create mock reference [default: %default]")
+    group_opt.add_option("-z", dest="zero_error_prob",
+                         action="store_true", default=False,
+                         help="don't use the quality scores from the fastq, use zero error prob [default: %default]")
 
-if __name__ == '__main__':
-    # fix_expected_res('~/EMIRGE/EMIRGE-data/mock_reads/mock_reads_one_change_3_in_each_region_low_frequency/expected_res.csv')
-    # options = parse_arguments()
-    # create_mock_reads(options.fasta_directory, options.mock_reads_directory, options.base_fastq_path, options.total_number_of_bacterias)
-    create_mock_reads()
-    # create_mock_refs()
-   # create_mock_reads_from_mock_refs()
+    parser.add_option_group(group_opt)
+
+    group_reads = OptionGroup(parser, "Reads flags",
+                            "These flags are all optional to create mock reads.")
+    group_reads.add_option("--nb", dest="amount_of_bacterias",
+                         type="int", default=10,
+                         help="The number of bacterias in the mock mixture [default: %default]")
+    group_reads.add_option("--mf", dest="minimum_frequency",
+                         type="float", default=0.5,
+                         help="The minimum frequency of each mock bacteria in the mixture [default: %default]")
+    group_reads.add_option("-s", dest="sort_bacterias_by_frequency",
+                         action="store_true", default=False,
+                         help="sort bacterias by frequency before changing them (in order to change low frequency bacteria) [default: %default]")
+    parser.add_option_group(group_reads)
+
+    return parser
+
+
+
+def main(argv = sys.argv[1:]):
+    define_logger(logging.DEBUG)
+    parser = get_command_line_arguments_parser()
+
+    # ACTUALLY PARSE ARGS
+    (options, args) = parser.parse_args(argv)
+
+    # minimal sanity checking of input
+    if len(args) != 3:
+        parser.error(
+            "EXPECTED_RES_PATH ACTUAL_RES_PATH WORKING_DIR are required, and all options except DIR should have a flag associated with them (options without flags: %s)" % args)
+        return
+
+    fasta_dir = os.path.abspath(args[0])
+    working_dir = os.path.abspath(args[1])
+    size = int(args[2])
+
+    if options.create_mock_reference:
+        create_mock_fasta(fasta_dir, working_dir, size)
+    else:
+        create_mock_reads(fasta_directory=fasta_dir,
+                          mock_reads_dir=working_dir,
+                          base_fastq=os.path.abspath(options.fastq_path),
+                          total_number_of_bacterias=options.amount_of_bacterias,
+                          min_frequency=options.minimum_frequency,
+                          keep_original=options.keep_original,
+                          sort_frequency=options.sort_bacterias_by_frequency,
+                          bacterium_to_change=options.changed_bacteria_amount,
+                          regions_to_change=options.changed_regions,
+                          bases_to_change=options.changed_bases_amount,
+                          total_amout_of_reads=size,
+                          zero_error=options.zero_error_prob)
+
+
+if __name__ == "__main__":
+    main()
+
+
+# if __name__ == '__main__':
    #  fix_randomreads_output_undo_reverse_complete('/home/vered/EMIRGE/EMIRGE-data/mock_read_errors_test/random_reads.fastq', '/home/vered/EMIRGE/EMIRGE-data/mock_read_errors_test/random_reads_fixed.fastq')
    #  test_random_reads_without_pair('/home/vered/EMIRGE/EMIRGE-data/mock_read_errors_test/random_reads_fixed.fastq')
    # merge_fasta_paired_reads_with_reads('/home/vered/EMIRGE/EMIRGE-data/mock_read_errors_test/mockReads_R1.fa',

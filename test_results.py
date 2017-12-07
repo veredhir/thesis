@@ -1,3 +1,5 @@
+
+
 import numpy as np
 from emirge_headers import *
 from emirge_utills import *
@@ -33,7 +35,7 @@ def validate_priors(df, threshold=VALIDATION_THRESHOLD_THRESHOLD):
         raise Exception("sum of prior is not 1")
 
 
-def calc_mismatch_srore(seq1, seq2):
+def calc_mismatch_score(seq1, seq2):
     score = 0
     for i in range(len(seq1)):
         if seq1[i] != seq2[i]:
@@ -49,7 +51,7 @@ def calc_dfs_mismatch_score(test_df, expected_df, mismatch_threshold):
     :return: merged df with score col contains the number of mismatch between the sequences
     """
     merged = pd.merge(test_df, expected_df, on=Header.region, suffixes=('_t', '_e'))
-    merged['mismatch_score'] = merged.apply(lambda r: calc_mismatch_srore(r[Header.sequence + '_t'], r[Header.sequence + '_e']), axis=1)
+    merged['mismatch_score'] = merged.apply(lambda r: calc_mismatch_score(r[Header.sequence + '_t'], r[Header.sequence + '_e']), axis=1)
     merged = merged[merged['mismatch_score'] < mismatch_threshold][['mismatch_score',
                                                            Header.ref_id + '_t',
                                                            Header.ref_id + '_e',
@@ -77,7 +79,7 @@ def compare_specific_reference(actual_res_path, expected_res_path, ref_expected_
     validate_priors(expected_df)
 
     scored_merge_df = pd.merge(test_df, expected_df, on=Header.region, suffixes=('_t', '_e'))
-    scored_merge_df['mismatch_score'] = scored_merge_df.apply(lambda r: calc_mismatch_srore(r[Header.sequence + '_t'], r[Header.sequence + '_e']), axis=1)
+    scored_merge_df['mismatch_score'] = scored_merge_df.apply(lambda r: calc_mismatch_score(r[Header.sequence + '_t'], r[Header.sequence + '_e']), axis=1)
 
     mapped_data = scored_merge_df[(scored_merge_df[Header.ref_id + '_e'] == ref_expected_id) & (scored_merge_df['mismatch_score'] < 5)]
     presented_data = mapped_data[[Header.ref_id + '_e', Header.ref_id + '_t', Header.region, 'prior_e', 'prior_t', 'mismatch_score' ]].copy()
@@ -101,27 +103,33 @@ def compare_specific_reference(actual_res_path, expected_res_path, ref_expected_
 
 
 def test_how_many_mismatch_in_each_reference(test_df, expected_df, max_allowed_mismatch):
-    ref_e_ids = expected_df[Header.ref_id].drop_duplicates().tolist()
+    scored_merge_df = pd.merge(test_df, expected_df, on=Header.region, suffixes=('_t', '_e'))
+    scored_merge_df['mismatch_score'] = scored_merge_df.apply(
+        lambda r: calc_mismatch_score(r[Header.sequence + '_t'], r[Header.sequence + '_e']), axis=1)
+    scored_merge_df['overall_mismatch_score'] = scored_merge_df.groupby([Header.ref_id + '_e', Header.ref_id + '_t'])['mismatch_score'].transform(sum)
 
-    scored_merge_df = calc_dfs_mismatch_score(test_df, expected_df, max_allowed_mismatch)
-    best_match_df = scored_merge_df.groupby([Header.ref_id + '_t'])['diff_score'].min().reset_index()
-    match_full_data_df = best_match_df.merge(scored_merge_df, on=['diff_score', Header.ref_id + '_t'], how='inner')
-    match_full_data_df = match_full_data_df.drop_duplicates(Header.ref_id + '_t')
+    scored_groupby_ref_expected = scored_merge_df.groupby(Header.ref_id + '_e')
 
-    for ref_e in ref_e_ids:
-        mapped_data = match_full_data_df[match_full_data_df[Header.ref_id + '_e'] == ref_e ]
-        diff = mapped_data[mapped_data['mismatch_score']!=0]
-        if len(diff) != 0:
-            logging.info("ref e = {}, number of ref t = {}, number of not exact ref t = {}, avg mismatch = {}" \
-                         .format(ref_e,
-                                 len(mapped_data),
-                                 len(diff),
-                                 np.mean(diff['mismatch_score'].tolist())))
+    perfect_match_counter = 0
+    non_perfect_match_counter = 0
+    for ref_e, df in scored_groupby_ref_expected:
+        match = df[(df.weight_e == df.weight_t)]
+        min_score = min(match.overall_mismatch_score.tolist())
+        best_match = match[(match.overall_mismatch_score == min_score)]
+        if min_score == 0:
+            perfect_match_counter += 1
         else:
-            logging.info("ref e = {}, number of ref t = {} - Zero mismatch" \
-                         .format(ref_e,
-                                 len(mapped_data)))
-    logging.info("referece_ids: {}".format(ref_e_ids))
+            print "ref e = {}".format(ref_e)
+            data_to_print =  best_match.apply(
+                lambda r: ["ref_t = {}, region = {}, diff index = {}, e base = {}, t base = {}".format(r.ref_t, r.region, i,  r.sequence_e[i], r.sequence_t[i])
+                           for i in range(len(r.sequence_e)) if r.sequence_e[i] != r.sequence_t[i] ],
+                axis=1 )
+            for data in data_to_print.tolist():
+                if len(data) != 0:
+                    print data
+            non_perfect_match_counter += 1
+
+    print "#Perfect match = {}, #Non-Perfect match = {}\n".format(perfect_match_counter, non_perfect_match_counter)
 
 
 def test_mock_reads_for_similarity(expected_res_path):
@@ -130,7 +138,7 @@ def test_mock_reads_for_similarity(expected_res_path):
 
     scored_merge_df = pd.merge(expected_df, expected_df, on=Header.region, suffixes=('_t', '_e'))
     scored_merge_df['mismatch_score'] = scored_merge_df.apply(
-        lambda r: calc_mismatch_srore(r[Header.sequence + '_t'], r[Header.sequence + '_e']), axis=1)
+        lambda r: calc_mismatch_score(r[Header.sequence + '_t'], r[Header.sequence + '_e']), axis=1)
 
     mapped_data = scored_merge_df[
         (scored_merge_df[Header.ref_id + '_e'] != scored_merge_df[Header.ref_id + '_t']) & (scored_merge_df['mismatch_score'] < 5)]
@@ -292,15 +300,15 @@ def main_compare_basic(expected_res_path, actual_res_path, working_dir, test_nam
 
 def get_command_line_arguments_parser():
     USAGE = \
-        """usage: %prog EXPECTED_RES_PATH ACTUAL_RES_PATH WORKING_DIR [options]
+        """usage: %prog EXPECTED_RES_PATH ACTUAL_RES_PATH WORKING_DIR [required_options] [options]
 
         Compare the expected results to the actual results of emirge_smurf
         """
 
     parser = OptionParser(USAGE)
 
-    group_compare = OptionGroup(parser, "Required flags",
-                             "These flags are all required to run EMIRGE, and may be supplied in any order.")
+    group_compare = OptionGroup(parser, "Optional flags",
+                             "These flags are all optional.")
 
     group_compare.add_option("-r", dest="reference_id",
                           type="string", default=None,
@@ -339,10 +347,11 @@ def main(argv = sys.argv[1:]):
 
     if options.similarity:
         test_mock_reads_for_similarity(expected_res_path)
+    elif options.reference_id:
+        compare_specific_reference(actual_res_path, expected_res_path, options.reference_id, working_dir, options.test_name)
     else:
         main_compare_basic(expected_res_path, actual_res_path, working_dir, options.test_name, options.max_allowed_mismatch)
-    if options.reference_id:
-        compare_specific_reference(actual_res_path, expected_res_path, options.reference_id, working_dir, options.test_name)
+
 
 
 if __name__ == "__main__":
