@@ -74,7 +74,6 @@ class EM(object):
                 primers_path,
                 fasta,
                 read_length,
-                reference,
                 number_of_region,
                 update_weight_using_the_reads,
                 max_changed_bases_rate_for_split,
@@ -94,7 +93,6 @@ class EM(object):
                                                 fasta_path=fasta,
                                                 primers_path=primers_path,
                                                 read_len=read_length,
-                                                reference_path=reference,
                                                 number_of_regions=number_of_region,
                                                 update_weight_using_the_reads=update_weight_using_the_reads,
                                                 max_changed_bases_rate_for_split=max_changed_bases_rate_for_split,
@@ -177,8 +175,8 @@ def main(argv = sys.argv[1:]):
                                      "See also split_threshold. (default: %default)")
     group_thresholds.add_option("-t", "--split_threshold",
                                 type="float", default="0.05",
-                                help="If the second best sequence is different then the best sequence <= this fractional identity over their bases"
-                                     "then split the sequences into two for the next iteration.  (default: %default; valid range: [0.0, 1.0] ) ")
+                                help="limit the amount of bases change in one split to this threshold, the splitted "
+                                     "sequence can't be too different from the original sequence (default: %default; valid range: [0.0, 1.0] ) ")
     group_thresholds.add_option("-j", "--join_threshold",
                                 type="float", default="0.999",
                                 help="If two candidate sequences share >= this fractional identity over their bases with mapped reads, "
@@ -201,10 +199,6 @@ def main(argv = sys.argv[1:]):
                       type="int", default=40,
                       help="""Number of iterations to perform.  It may be necessary to use more iterations for more
                       complex samples (default=%default)""")
-    group_opt.add_option("-d", "--reference_csv_db_path",
-                         type="string", default=None,
-                         help="path to precomputed csv reference db.  If not provided, "
-                         "an scv reference db will be run for you.")
     group_opt.add_option("--weight",
                          action="store_true", default=False,
                          help="update the reference db with the number "
@@ -215,7 +209,7 @@ def main(argv = sys.argv[1:]):
                          help="Add debug info")
     group_opt.add_option("--split",
                          action="store_true", default=False,
-                         help="Don't split sequences")
+                         help="Allow splitting sequences")
 
     parser.add_option_group(group_opt)
 
@@ -291,7 +285,6 @@ def main(argv = sys.argv[1:]):
                primers_path=options.primers_path,
                fasta=options.fasta_db,
                read_length=options.read_length,
-               reference=options.reference_csv_db_path,
                number_of_region=options.regions,
                update_weight_using_the_reads=options.weight,
                max_changed_bases_rate_for_split=options.split_threshold,

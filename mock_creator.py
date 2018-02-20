@@ -8,8 +8,21 @@ import glob
 import pandas as pd
 from random import randint
 import shutil
+from random import shuffle
 
 from emirge_utills import *
+
+
+class FrequencyDistribution(object):
+    UNIFORM = "uniform"
+    RANDOM = "random"
+    POWER_LOW = "power_low"
+
+    @staticmethod
+    def is_valid(test):
+        if test in [FrequencyDistribution.UNIFORM, FrequencyDistribution.RANDOM, FrequencyDistribution.POWER_LOW]:
+            return True
+        return False
 
 
 class Base(object):
@@ -63,7 +76,6 @@ class MockBacterium(object):
         self.amount_of_reads_per_region = self.frequency*total_amount_of_reads_per_region/100
         self.read_length = read_length
         self.amplified_regions = []
-        self.full_sequences = []
         self.sequences = []
         self.reads = []
         self.pair_reads = []
@@ -73,6 +85,8 @@ class MockBacterium(object):
         if self.regions_to_change > 0:
             self.new_id += '#'
         changed_regions = 0
+        # change will be done in random region.
+        shuffle(fasta_files)
         for file in fasta_files:
             sequence = self.get_sequence_by_title(file.path)
             if sequence is None: #the bacteria wasn't amplified in this region
@@ -83,7 +97,6 @@ class MockBacterium(object):
                     changed_regions += 1
                 self.sequences.append(sequence[:self.read_length] + sequence[-1 * self.read_length:])
                 self.regions.append(file.region)
-                self.full_sequences.append(sequence)
                 self.amplified_regions.append(file.region)
                 self.reads.append("".join(sequence[:self.read_length]))
                 self.pair_reads.append(self.extract_paired_read_from_sequence(sequence))
@@ -141,6 +154,11 @@ class MockBacterium(object):
         for read in self.pair_reads:
             pair_reads += int(self.amount_of_reads_per_region) * [read]
         return pair_reads
+
+
+def print_read_amount(fastq_path):
+    records = SeqIO.index(fastq_path, "fastq")
+    print "{} records in path {}".format(len(records), fastq_path)
 
 
 def pick_random_bacterias(fasta_path, total_num_of_bacteria):
@@ -212,11 +230,26 @@ def create_mock_bacterium(bacterium_frequencies,
     return bacterium
 
 
+def reset_error_prob(workdir, fastq_path):
+    fastq_name = os.path.basename(fastq_path)
+    zero_prob_fastq = os.path.join(workdir, fastq_name)
+    with open(fastq_path, 'r') as fastq:
+        with open(zero_prob_fastq, 'w') as new_fastq_name:
+            fastq_ix = 0
+            for line in fastq:
+                if fastq_ix % 4 == 3:
+                    new_fastq_name.write((len(line) - 1) * 'z' + '\n')
+                else:
+                    new_fastq_name.write(line)
+                fastq_ix += 1
+
+
 def write_bacterium_to_fastq(mock_bacterium,
                              base_fastq_path,
                              mock_fastq_path1,
                              mock_fastq_path2,
                              zero_error):
+
     reads = []
     paired_reads = []
     for bacteria in mock_bacterium:
@@ -251,16 +284,14 @@ def write_bacterium_to_fastq(mock_bacterium,
 
 def write_bacterium_to_fasta(mock_bacterium,
                              mock_fasta_path1,
-                             mock_fasta_path2,
                              min_frequency):
     with open(mock_fasta_path1, 'w') as mock_fasta1:
-        with open(mock_fasta_path2, 'w') as mock_fasta2:
-            for bacteria in mock_bacterium:
-                sequences = bacteria.full_sequences*int(100*bacteria.frequency/min_frequency)
-                for seq in sequences:
-                    mock_fasta1.write(">{}\n".format(bacteria.id))
-                    mock_fasta1.write(seq + '\n')
-                    mock_fasta1.write('\n')
+        for bacteria in mock_bacterium:
+            sequences = bacteria.sequences*int(bacteria.frequency/min_frequency)
+            for seq in sequences:
+                mock_fasta1.write(">{}\n".format(bacteria.id))
+                mock_fasta1.write(seq + '\n')
+                mock_fasta1.write('\n')
 
     print "Done write_bacterium_to_fasta"
 
@@ -302,17 +333,17 @@ def create_mock_fasta(source_fasta_path, new_fasta_path, amount):
                     pass
 
 
-def get_frequency_list(amount_of_refs=15, max_percent=20, min_frequency=0.5, isSorted=False):
+def get_random_frequncies(amount_of_refs=15, max_percent=20, min_frequency=0.5, isSorted=False):
     list_of_frequency = []
-    for i in range(0, amount_of_refs-1):
-        remainder = int((100 - sum(list_of_frequency))*min_frequency)
+    for i in range(0, amount_of_refs - 1):
+        remainder = int((100 - sum(list_of_frequency)) * min_frequency)
         remainder = remainder if remainder > 0 else 0
-        percent = randint(1, min(remainder, max_percent )/min_frequency)*min_frequency  # accuracy of 0.5
+        percent = randint(1, min(remainder, max_percent) / min_frequency) * min_frequency  # accuracy of 0.5
         list_of_frequency.append(percent)
     curr_sum = sum(list_of_frequency)
     list_of_frequency.append(100 - curr_sum)
     for p in list_of_frequency:
-        if p < 0 :
+        if p < 0:
             raise Exception("Percent must be positive number {}".format(p))
     total = 0
     for l in list_of_frequency:
@@ -323,6 +354,17 @@ def get_frequency_list(amount_of_refs=15, max_percent=20, min_frequency=0.5, isS
         list_of_frequency.sort()
     print("get_frequency_list -> {}".format(list_of_frequency))
     return list_of_frequency
+
+
+
+def get_frequency_list(amount_of_refs=15, max_percent=20, min_frequency=0.5, isSorted=False, distribution=FrequencyDistribution.UNIFORM):
+    frequencies = []
+    if distribution == FrequencyDistribution.RANDOM:
+        frequencies = get_random_frequncies(amount_of_refs, max_percent, min_frequency, isSorted=False)
+    elif distribution == FrequencyDistribution.UNIFORM:
+        frequencies = [100/amount_of_refs]*amount_of_refs
+
+    return frequencies
 
 
 def create_mock_reads_directory(mock_reads_dir):
@@ -342,7 +384,8 @@ def create_mock_reads(fasta_directory,
                       regions_to_change,
                       bases_to_change,
                       total_amout_of_reads,
-                      zero_error
+                      zero_error,
+                      distribution
                       ):
     """
     using the full fasta DB as reference,
@@ -355,17 +398,21 @@ def create_mock_reads(fasta_directory,
     mock_fastq1 = os.path.join(mock_reads_dir, base_read_file_name + "1.fastq")
     mock_fastq2 = os.path.join(mock_reads_dir, base_read_file_name + "2.fastq")
     mock_fa1 = os.path.join(mock_reads_dir, base_read_file_name + "1.fa")
-    mock_fa2 = os.path.join(mock_reads_dir, base_read_file_name + "2.fa")
     expected_data_path = os.path.join(mock_reads_dir, "expected_res.csv")
 
     # mock_refs = '/home/vered/EMIRGE/EMIRGE-data/mock_fasta/'
     # fasta_dir = mock_refs
 
-    total_num_of_regions = 5
-    total_amount_of_reads_per_region = total_amout_of_reads/total_num_of_regions
-    read_len = 126
+    frequencies = get_frequency_list(total_number_of_bacterias,
+                                     min_frequency=min_frequency,
+                                     isSorted=sort_frequency,
+                                     distribution=distribution)
 
-    frequencies = get_frequency_list(total_number_of_bacterias, min_frequency=min_frequency, isSorted=sort_frequency)
+    total_num_of_regions = 5
+    total_amount_of_reads_per_region = total_amout_of_reads / total_num_of_regions
+    read_len = 126
+    min_frequency = min(frequencies)
+
     mock_bacterium = create_mock_bacterium(frequencies,
                                            fasta_directory,
                                            total_num_of_regions,
@@ -376,7 +423,7 @@ def create_mock_reads(fasta_directory,
                                            bases_to_change=bases_to_change,
                                            keep_original=keep_original)
 
-    write_bacterium_to_fasta(mock_bacterium, mock_fa1, mock_fa2, min_frequency)
+    write_bacterium_to_fasta(mock_bacterium, mock_fa1, min_frequency)
     write_bacterium_to_fastq(mock_bacterium, base_fastq, mock_fastq1, mock_fastq2, zero_error)
     write_mock_bacterium_to_csv(mock_bacterium, expected_data_path)
 
@@ -473,7 +520,7 @@ def get_command_line_arguments_parser():
 
     """
     USAGE = \
-        """usage: %prog FASTA_DIR WORKING_DIR FASTQ_PATH WORKING_DIR SIZE[options]
+        """usage: %prog FASTA_DIR WORKING_DIR SIZE [options]
 
         Create mock bacteria mixture of mock reference based on reference db (FASTA_DIR)
         The mock will be store in WORKING_DIR, and will contain SIZE reads\ references
@@ -505,6 +552,12 @@ def get_command_line_arguments_parser():
     group_opt.add_option("-z", dest="zero_error_prob",
                          action="store_true", default=False,
                          help="don't use the quality scores from the fastq, use zero error prob [default: %default]")
+    group_opt.add_option("-d", dest="distribution_srt",
+                         type="string", default=FrequencyDistribution.UNIFORM,
+                         help="frequencies distribution: \"{}\"\ \"{}\"\ \"{}\" [default: %default]".format(FrequencyDistribution.UNIFORM,
+                                                                                                            FrequencyDistribution.RANDOM,
+                                                                                                            FrequencyDistribution.POWER_LOW))
+
 
     parser.add_option_group(group_opt)
 
@@ -519,6 +572,9 @@ def get_command_line_arguments_parser():
     group_reads.add_option("-s", dest="sort_bacterias_by_frequency",
                          action="store_true", default=False,
                          help="sort bacterias by frequency before changing them (in order to change low frequency bacteria) [default: %default]")
+    group_reads.add_option("--rep", dest="reset_error_probs",
+                           action="store_true", default=False,
+                           help="reset to zero the error probability of given fastq file")
     parser.add_option_group(group_reads)
 
     return parser
@@ -538,12 +594,22 @@ def main(argv = sys.argv[1:]):
             "EXPECTED_RES_PATH ACTUAL_RES_PATH WORKING_DIR are required, and all options except DIR should have a flag associated with them (options without flags: %s)" % args)
         return
 
+    if not FrequencyDistribution.is_valid(options.distribution_srt):
+        parser.error(
+            "frequencies distribution must be one of the following: \"{}\"\ \"{}\"\ \"{}\" [default: %default]"
+                .format(FrequencyDistribution.UNIFORM,
+                        FrequencyDistribution.RANDOM,
+                        FrequencyDistribution.POWER_LOW))
+        return
+
     fasta_dir = os.path.abspath(args[0])
     working_dir = os.path.abspath(args[1])
     size = int(args[2])
 
     if options.create_mock_reference:
         create_mock_fasta(fasta_dir, working_dir, size)
+    elif options.reset_error_probs:
+        reset_error_prob(working_dir, options.fastq_path)
     else:
         create_mock_reads(fasta_directory=fasta_dir,
                           mock_reads_dir=working_dir,
@@ -556,7 +622,8 @@ def main(argv = sys.argv[1:]):
                           regions_to_change=options.changed_regions,
                           bases_to_change=options.changed_bases_amount,
                           total_amout_of_reads=size,
-                          zero_error=options.zero_error_prob)
+                          zero_error=options.zero_error_prob,
+                          distribution=options.distribution_srt)
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 from Bio import SeqIO
 
+
 from emirge_headers import *
 from emirge_const import quals
 from emirge_utills import *
@@ -67,7 +68,8 @@ class EmirgeThresholds():
 class EmirgePaths():
     def __init__(self, working_dir):
         self.reference = os.path.join(working_dir, "reference_db.csv")
-        self.full_reference = os.path.join(working_dir, "full_reference_db.csv")
+        self.full_reference_name = "full_reference_db.csv"
+        self.full_reference = ""
         self.current_state = os.path.join(working_dir, "curr_state.csv")
         self.final_results = os.path.join(working_dir, "final_results.csv")
         self.mapping = os.path.join(working_dir, "mapping.csv")
@@ -85,7 +87,6 @@ class EmirgeIteration(object):
                  primers_path=None,
                  fasta_path=None,
                  read_len=None,
-                 reference_path=None,
                  number_of_regions=5,
                  update_weight_using_the_reads=False,
                  # thresholds:
@@ -135,7 +136,6 @@ class EmirgeIteration(object):
                                   fastq_path,
                                   reversed_fastq_path,
                                   read_len,
-                                  reference_path,
                                   fasta_path,
                                   update_weight_using_the_reads,
                                   allow_split,
@@ -149,11 +149,11 @@ class EmirgeIteration(object):
                          fastq_path,
                          reversed_fastq_path,
                          read_len,
-                         reference_path,
                          fasta_path,
                          update_weight_using_the_reads,
                          allow_split,
                          debug_mode):
+        self.paths.full_reference = os.path.join(fasta_path, self.paths.full_reference_name)
         self.debug_mode = debug_mode
         self.iteration_index = 0
         logging.info("\n\n ITERATION {}".format(self.iteration_index))
@@ -163,13 +163,14 @@ class EmirgeIteration(object):
         self.initialize_primers(primers_path)
         reads_df = self.prepare_reads(fastq_path, reversed_fastq_path)
         self.primers.update_primers_using_histogram()
-        if reference_path is None:
+        if not self.is_processed_reference_file_exists():
             self.prepare_references(fasta_path)
+            self.get_unique_amplified_references()
         else:
-            self.paths.full_reference = reference_path
-        ref_df = self.get_unique_amplified_references()
-        self._find_mapping(reads_df, ref_df)
+            full_ref_df = pd.DataFrame.from_csv(self.paths.full_reference, index_col=None)
+            full_ref_df.to_csv(self.paths.reference, index=False)
 
+        self._find_mapping(reads_df)
         self._find_initial_weight(update_weight_using_the_reads)
         self.calc_initial_priors()
 
@@ -217,6 +218,14 @@ class EmirgeIteration(object):
                                                             MappingForamt.Count] +
                                                             Base.all].drop_duplicates()
         self._find_mapping(reads_df)
+
+
+    def is_processed_reference_file_exists(self):
+        if os.path.exists(self.paths.full_reference):
+            return True
+        else:
+            return False
+
 
     @time_it
     def _get_ref_for_region(self, fasta_path, read_length, region_ix):
@@ -543,7 +552,11 @@ class EmirgeIteration(object):
         unique_ref_df = unique_ref_df[ReferenceFormat.header]
         unique_ref_df.drop_duplicates(inplace=True)
 
+        # initialize current run reference file
         unique_ref_df.to_csv(self.paths.reference, index=False)
+
+        # save the reference DB in cvs format, for future use:
+        unique_ref_df.to_csv(self.paths.full_reference, index=False)
 
         logging.info("Found {}/{} unique reference".format(
             len(unique_ref_df.drop_duplicates(ReferenceFormat.Ref_Id)), len(reference_df.drop_duplicates(ReferenceFormat.Original_Id))))
@@ -1059,8 +1072,7 @@ class EmirgeIteration(object):
             # 1. The rate of changed bases in the split reference: (how many bases will change)/(length of read)
             # 2. The min rate to create a new split reference: (prior*minor) * (# of regions/ reference weight)
 
-            max_prob_n_full_data['is_split'] = (max_prob_n_full_data['second_best_counter'] / float(2*self.read_len) >= 0) \
-                                               & (max_prob_n_full_data['second_best_counter'] / float(2*self.read_len) < self.th.max_changed_bases_rate_for_split) \
+            max_prob_n_full_data['is_split'] = (max_prob_n_full_data['second_best_counter'] / float(2*self.read_len) < self.th.max_changed_bases_rate_for_split) \
                                                & (max_prob_n_full_data['expected_coverage_minor'] >= self.th.min_coverage_for_split)
             max_prob_n_full_data['is_split'].update(
                 max_prob_n_full_data.groupby(CurrentStateFormat.Reference_id)['is_split'].transform(any).reset_index()['is_split'])

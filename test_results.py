@@ -35,10 +35,10 @@ def validate_priors(df, threshold=VALIDATION_THRESHOLD_THRESHOLD):
         raise Exception("sum of prior is not 1")
 
 
-def calc_mismatch_score(seq1, seq2):
+def calc_mismatch_score(seq_t, seq_e):
     score = 0
-    for i in range(len(seq1)):
-        if seq1[i] != seq2[i]:
+    for i in range(len(seq_t)):
+        if (seq_t[i] != seq_e[i]) & (seq_e[i] != 'N'):
             score += 1
     return score
 
@@ -72,64 +72,77 @@ def calc_dfs_mismatch_score(test_df, expected_df, mismatch_threshold):
     return merged
 
 
-def compare_specific_reference(actual_res_path, expected_res_path, ref_expected_id, result_dir, test_name):
+def compare_specific_reference(actual_res_path, expected_res_path, result_dir, test_name,  max_allowed_mismatch, ref_expected_id=None):
     test_df = get_test_df(actual_res_path)
     expected_df = get_expected_df(expected_res_path)
-    validate_priors(test_df)
-    validate_priors(expected_df)
 
-    scored_merge_df = pd.merge(test_df, expected_df, on=Header.region, suffixes=('_t', '_e'))
-    scored_merge_df['mismatch_score'] = scored_merge_df.apply(lambda r: calc_mismatch_score(r[Header.sequence + '_t'], r[Header.sequence + '_e']), axis=1)
-
-    mapped_data = scored_merge_df[(scored_merge_df[Header.ref_id + '_e'] == ref_expected_id) & (scored_merge_df['mismatch_score'] < 5)]
-    presented_data = mapped_data[[Header.ref_id + '_e', Header.ref_id + '_t', Header.region, 'prior_e', 'prior_t', 'mismatch_score' ]].copy()
-    presented_data = presented_data.sort([Header.ref_id + '_e', Header.ref_id + '_t', 'prior_t', Header.region],ascending=False )
-    presented_data.index = range(1, len(presented_data) + 1)
-    presented_data['prior_e'] = presented_data['prior_e'].apply(lambda val: "{0:.2f}%".format(val * 100))
-    presented_data['prior_t'] = presented_data['prior_t'].apply(lambda val: "{0:.2f}%".format(val * 100))
-
-    ax = plt.subplot(111, frame_on=False)  # no visible frame
-    ax.xaxis.set_visible(False)  # hide the x axis
-    ax.yaxis.set_visible(False)  # hide the y axis
-
-    table(ax, presented_data, loc='center')  # where df is your data frame
-    # table(ax, presented2, loc='center')
-
-    res_name = 'emirge_smurf_'+ test_name + '_reference_id_' + str(ref_expected_id) + '.png'
-    im_path = os.path.join(result_dir, res_name)
-    plt.savefig(im_path)
-    plt.clf()
-    logging.info("saving results to: {}".format(im_path))
-
-
-def test_how_many_mismatch_in_each_reference(test_df, expected_df, max_allowed_mismatch):
-    scored_merge_df = pd.merge(test_df, expected_df, on=Header.region, suffixes=('_t', '_e'))
+    match_df = get_expected_test_map_df(test_df, expected_df, max_allowed_mismatch)
+    match_df = match_df[[Header.ref_id + "_e", Header.ref_id + "_t"]].drop_duplicates()
+    test_df = test_df.rename(columns={Header.ref_id: Header.ref_id + '_t', Header.sequence: Header.sequence + '_t', Header.prior: Header.prior + '_t'})
+    expected_df = expected_df.rename(
+        columns={Header.ref_id: Header.ref_id + '_e', Header.sequence: Header.sequence + '_e', Header.prior: Header.prior + '_e'})
+    scored_merge_df = pd.merge(test_df, match_df, on=[Header.ref_id + '_t'])
+    scored_merge_df = pd.merge(expected_df, scored_merge_df, on=[Header.region, Header.ref_id + '_e'])
     scored_merge_df['mismatch_score'] = scored_merge_df.apply(
         lambda r: calc_mismatch_score(r[Header.sequence + '_t'], r[Header.sequence + '_e']), axis=1)
-    scored_merge_df['overall_mismatch_score'] = scored_merge_df.groupby([Header.ref_id + '_e', Header.ref_id + '_t'])['mismatch_score'].transform(sum)
+
+    if not ref_expected_id:
+        ref_expected_ids = scored_merge_df[Header.ref_id + '_e'].drop_duplicates().tolist()
+    else:
+        ref_expected_ids = list(ref_expected_id)
+
+    for ref_expected_id in ref_expected_ids:
+        mapped_data = scored_merge_df[(scored_merge_df[Header.ref_id + '_e'] == ref_expected_id)]
+        presented_data = mapped_data[[Header.ref_id + '_e', Header.ref_id + '_t', Header.region, 'prior_e', 'prior_t', 'mismatch_score' ]].copy()
+        presented_data = presented_data.sort([Header.ref_id + '_e', Header.ref_id + '_t', 'prior_t', Header.region],ascending=False )
+        presented_data.index = range(1, len(presented_data) + 1)
+        presented_data['prior_e'] = presented_data['prior_e'].apply(lambda val: "{0:.2f}%".format(val * 100))
+        presented_data['prior_t'] = presented_data['prior_t'].apply(lambda val: "{0:.2f}%".format(val * 100))
+
+        ax = plt.subplot(111, frame_on=False)  # no visible frame
+        ax.xaxis.set_visible(False)  # hide the x axis
+        ax.yaxis.set_visible(False)  # hide the y axis
+
+        table(ax, presented_data, loc='center')  # where df is your data frame
+        # table(ax, presented2, loc='center')
+
+        res_name = 'emirge_smurf_'+ test_name + '_reference_id_' + str(ref_expected_id) + '.png'
+        im_path = os.path.join(result_dir, res_name)
+        plt.savefig(im_path)
+        plt.clf()
+        logging.info("saving results to: {}".format(im_path))
+
+
+def test_how_many_mismatch_in_each_reference(test_df, expected_df, match_df, max_allowed_mismatch, original_fasta_path=None):
+    match_df.sort_values([Header.prior + '_t'], axis=0, ascending=False, inplace=True)
+    match_df = match_df[[Header.ref_id +"_e", Header.ref_id +"_t"]].drop_duplicates(Header.ref_id +"_e")
+    test_df = test_df.rename(columns={Header.ref_id: Header.ref_id + '_t', Header.sequence: Header.sequence + '_t'})
+    expected_df = expected_df.rename(columns={Header.ref_id: Header.ref_id + '_e', Header.sequence: Header.sequence + '_e'})
+    scored_merge_df = pd.merge(test_df, match_df, on=[Header.ref_id + '_t'])
+    scored_merge_df = pd.merge(expected_df, scored_merge_df, on=[Header.ref_id + '_e', Header.region])
+    scored_merge_df['mismatch_score'] = scored_merge_df.apply(
+        lambda r: calc_mismatch_score(r[Header.sequence + '_t'], r[Header.sequence + '_e']), axis=1)
 
     scored_groupby_ref_expected = scored_merge_df.groupby(Header.ref_id + '_e')
 
-    perfect_match_counter = 0
-    non_perfect_match_counter = 0
+    perfect_match=0
+    non_perfect_match=0
     for ref_e, df in scored_groupby_ref_expected:
-        match = df[(df.weight_e == df.weight_t)]
-        min_score = min(match.overall_mismatch_score.tolist())
-        best_match = match[(match.overall_mismatch_score == min_score)]
-        if min_score == 0:
-            perfect_match_counter += 1
+        curr_perfect_match = True
+        mismatch_data = df.apply(
+                lambda r: ["ref_t = {}\{}[{}], {}!={} |".format(r.ref_t, r.region, i,  r.sequence_e[i], r.sequence_t[i])
+                           for i in range(len(r.sequence_e)) if (r.sequence_e[i] != r.sequence_t[i]) & (r.sequence_e[i]!='N') ],
+                axis=1)
+        print "\nRef expected: {}:".format(ref_e)
+        for mismatch_target in mismatch_data:
+            if len(mismatch_target) != 0:
+                curr_perfect_match=False
+                print "".join(mismatch_target)
+        if curr_perfect_match:
+            perfect_match += 1
         else:
-            print "ref e = {}".format(ref_e)
-            data_to_print =  best_match.apply(
-                lambda r: ["ref_t = {}, region = {}, diff index = {}, e base = {}, t base = {}".format(r.ref_t, r.region, i,  r.sequence_e[i], r.sequence_t[i])
-                           for i in range(len(r.sequence_e)) if r.sequence_e[i] != r.sequence_t[i] ],
-                axis=1 )
-            for data in data_to_print.tolist():
-                if len(data) != 0:
-                    print data
-            non_perfect_match_counter += 1
-
-    print "#Perfect match = {}, #Non-Perfect match = {}\n".format(perfect_match_counter, non_perfect_match_counter)
+            non_perfect_match += 1
+    print "\n perfect match/ matches {}/{}".format(perfect_match, perfect_match+non_perfect_match)
 
 
 def test_mock_reads_for_similarity(expected_res_path):
@@ -152,8 +165,7 @@ def test_mock_reads_for_similarity(expected_res_path):
             print ref_t_data[['mismatch_score', Header.ref_id + '_t', Header.region]]
 
 
-def compare(test_df, expected_df, results_dir, name, max_allowed_mismatch):
-
+def get_expected_test_map_df(test_df, expected_df, max_allowed_mismatch):
     validate_priors(test_df)
     validate_priors(expected_df)
 
@@ -166,13 +178,19 @@ def compare(test_df, expected_df, results_dir, name, max_allowed_mismatch):
     match_full_data_df = best_match_df.merge(scored_merge_df, on=['diff_score', Header.ref_id + '_t'], how='inner')
     match_full_data_df = match_full_data_df.drop_duplicates(Header.ref_id + '_t')
     match_full_data_df['actual_prior'] = match_full_data_df.groupby('ref_e')['prior_t'].transform('sum')
-    match_full_data_df['actual_prior_diff'] = match_full_data_df['actual_prior'] -match_full_data_df[Header.prior + '_e']
-    match_full_data_df['actual_prior_diff_rel'] = match_full_data_df['actual_prior_diff']/match_full_data_df[Header.prior + '_e']
+    match_full_data_df['actual_prior_diff'] = match_full_data_df['actual_prior'] - match_full_data_df[
+        Header.prior + '_e']
+    match_full_data_df['actual_prior_diff_rel'] = match_full_data_df['actual_prior_diff'] / match_full_data_df[
+        Header.prior + '_e']
     match_full_data_df['count'] = match_full_data_df.groupby('ref_e')['ref_t'].transform('count')
-    match_full_data_df = match_full_data_df.drop_duplicates('ref_e')
-    if abs(sum(match_full_data_df['actual_prior'])-1) > 0.001:
-        print "ERROR!!!!!\n\n\n"
 
+    if abs(sum(match_full_data_df.drop_duplicates('ref_e')['actual_prior']) - 1) > 0.001:
+        raise Exception("ERROR! could not find map unique map between the test and the expected results")
+    return match_full_data_df
+
+
+def present_compared_data(match_full_data_df, name, results_dir):
+    match_full_data_df = match_full_data_df.drop_duplicates('ref_e')
     presented_data = match_full_data_df[[Header.ref_id + '_e', 'count', 'actual_prior', 'prior_e', 'actual_prior_diff']].copy()
     presented_data.rename(columns={'count': '# of refs',
                                    'actual_prior': 'actual frequency',
@@ -197,7 +215,13 @@ def compare(test_df, expected_df, results_dir, name, max_allowed_mismatch):
     plt.savefig(im_path)
     plt.clf()
     logging.info("saved results to {}".format(im_path))
-    return match_full_data_df
+
+
+def compare(test_df, expected_df, results_dir, name, max_allowed_mismatch):
+    match_full_data_df = get_expected_test_map_df(test_df, expected_df, max_allowed_mismatch)
+
+    present_compared_data(match_full_data_df, name, results_dir)
+    test_how_many_mismatch_in_each_reference(test_df, expected_df, match_full_data_df, max_allowed_mismatch)
 
 
 def get_presented_data(match_full_data_df):
@@ -219,7 +243,7 @@ def get_test_df(path):
     :param path: path to 'final_results.csv produced by emirge_smurf.py
     :return: df hold the final results
     """
-    df =  pd.DataFrame.from_csv(path, index_col=None)
+    df = pd.DataFrame.from_csv(path, index_col=None)
     df = df.rename(columns = {'Sequence': Header.sequence,
                               HeadersFormat.Region: Header.region,
                               HeadersFormat.Priors: Header.prior,
@@ -295,7 +319,7 @@ def main_compare_basic(expected_res_path, actual_res_path, working_dir, test_nam
     expected_df = get_expected_df(expected_res_path)
 
     compare(test_df, expected_df, working_dir, test_name, max_allowed_mismatch)
-    test_how_many_mismatch_in_each_reference(test_df, expected_df, max_allowed_mismatch)
+
 
 
 def get_command_line_arguments_parser():
@@ -313,6 +337,9 @@ def get_command_line_arguments_parser():
     group_compare.add_option("-r", dest="reference_id",
                           type="string", default=None,
                           help="reference id to compare")
+    group_compare.add_option("--ra", dest="reference_id_all",
+                             action="store_true", default=False,
+                             help="compare all the references")
     group_compare.add_option("-s", dest="similarity",
                           action="store_true", default=False,
                           help="Test the similarity between the reads in the mixture")
@@ -348,7 +375,9 @@ def main(argv = sys.argv[1:]):
     if options.similarity:
         test_mock_reads_for_similarity(expected_res_path)
     elif options.reference_id:
-        compare_specific_reference(actual_res_path, expected_res_path, options.reference_id, working_dir, options.test_name)
+        compare_specific_reference(actual_res_path, expected_res_path, working_dir, options.test_name, options.max_allowed_mismatch, options.reference_id)
+    elif options.reference_id_all:
+        compare_specific_reference(actual_res_path, expected_res_path, working_dir, options.test_name, options.max_allowed_mismatch)
     else:
         main_compare_basic(expected_res_path, actual_res_path, working_dir, options.test_name, options.max_allowed_mismatch)
 
