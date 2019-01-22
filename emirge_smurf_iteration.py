@@ -175,7 +175,6 @@ class EmirgeIteration(object):
         self.calc_initial_priors()
 
 
-
     @time_it
     def init(self, prev_emirge_iteration):
         """
