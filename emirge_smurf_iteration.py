@@ -672,10 +672,8 @@ class EmirgeIteration(object):
 
             for base in bases:
                 reads = ref_full_data[reads_data_columns[base]].rename(columns=rename_dict)
-                refs = ref_full_data[ref_data_columns[base]].rename(columns=rename_dict)
-
-                prob_n_for_base.update({base: (reads.multiply(refs).multiply(prob_success) +
-                                               (1 - reads.multiply(refs)).multiply(prob_fail))
+                # for each base we calculate P(nk = base):
+                prob_n_for_base.update({base: (reads.multiply(prob_success) + (1 - reads).multiply(prob_fail))
                                        .multiply(posteriors, axis='index')})
 
                 # Calculate P(Nk)for each region of the current reference:
