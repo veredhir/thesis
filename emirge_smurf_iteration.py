@@ -17,6 +17,8 @@ from emirge_const import quals
 from emirge_utills import *
 from seqBIn import *
 
+# import xarray as xr
+
 
 class Primer(object):
 
@@ -73,7 +75,8 @@ class EmirgePaths():
         self.current_state = os.path.join(working_dir, "curr_state.csv")
         self.final_results = os.path.join(working_dir, "final_results.csv")
         self.mapping = os.path.join(working_dir, "mapping.csv")
-        self.unique_ref_to_ref = os.path.join(working_dir, "unique_ref_id_to_ref_id.csv")
+        self.unique_ref_to_ref_name = "unique_ref_id_to_ref_id.csv"
+        self.unique_ref_to_ref = ""
         self.posteriors = os.path.join(working_dir, "posteriors.csv")
         self.read_quals = os.path.join(working_dir, "reads_db.csv")
 
@@ -154,6 +157,7 @@ class EmirgeIteration(object):
                          allow_split,
                          debug_mode):
         self.paths.full_reference = os.path.join(fasta_path, self.paths.full_reference_name)
+        self.paths.unique_ref_to_ref = os.path.join(fasta_path, self.paths.unique_ref_to_ref_name)
         self.debug_mode = debug_mode
         self.iteration_index = 0
         logging.info("\n\n ITERATION {}".format(self.iteration_index))
@@ -189,6 +193,7 @@ class EmirgeIteration(object):
         self.allow_split = prev_emirge_iteration.allow_split
         self.read_len = prev_emirge_iteration.read_len
         self.paths.read_quals = prev_emirge_iteration.paths.read_quals
+        self.paths.unique_ref_to_ref = prev_emirge_iteration.paths.unique_ref_to_ref
         self.th = prev_emirge_iteration.th
         curr_state_df = pd.DataFrame.from_csv(prev_emirge_iteration.paths.current_state, index_col=None)
         curr_state_df = curr_state_df[[CurrentStateFormat.Reference_id,
@@ -401,6 +406,7 @@ class EmirgeIteration(object):
 
             reads_and_refs_df.rename(columns=rename_base_dict, inplace=True)
             reads_and_refs_df[MappingForamt.Mapp_weight] = 0
+            logging.info("old columns = {}, wanted columns = {}".format(reads_and_refs_df.columns, MappingForamt.full_header))
             reads_and_refs_df = reads_and_refs_df[MappingForamt.full_header]
             mapping_dfs.append(reads_and_refs_df)
 
@@ -559,6 +565,8 @@ class EmirgeIteration(object):
 
         logging.info("Found {}/{} unique reference".format(
             len(unique_ref_df.drop_duplicates(ReferenceFormat.Ref_Id)), len(reference_df.drop_duplicates(ReferenceFormat.Original_Id))))
+        unique_ref_df[HeadersFormat.Unique_Ref_id] = unique_ref_df[HeadersFormat.Unique_Ref_id].apply(
+            lambda r: '$' + str(r))
         return unique_ref_df
 
     @time_it
@@ -625,8 +633,8 @@ class EmirgeIteration(object):
             there is no Pr(S|R) from previous round,
             so we 1 instead. (same probability for each Pr(S|R)
 
-           get_unique_amplified_references'prob N) If initial iteration, all reads and seqs are new, so all calcs
-            for Pr(N=n) use the prior as weighting factor instead of
+           Initial iteration: all reads and seqs are new, so all calcs
+            of Pr(N=n) use the Pr(S|R) as weighting factor instead of
             previous round's posterior.
         """
         # Get data:
@@ -639,7 +647,6 @@ class EmirgeIteration(object):
         prob_n_full_dict = {Base.A:[], Base.C:[], Base.G:[], Base.T:[]}
         mapping_grouped_by_ref = mapping_df.groupby(CurrentStateFormat.Reference_id)
 
-        i=0
         for ref_group_id, mapping_ref_df in mapping_grouped_by_ref:
             mapping_ref_df = mapping_ref_df.reset_index()
             ref_full_data = mapping_ref_df.merge(current_state_df, on=[CurrentStateFormat.Reference_id, CurrentStateFormat.Region], how='left', suffixes=('_read', '_ref'))
@@ -665,15 +672,11 @@ class EmirgeIteration(object):
 
             for base in bases:
                 reads = ref_full_data[reads_data_columns[base]].rename(columns=rename_dict)
-                # for each base we calculate P(nk = base):
-                prob_n_for_base.update({base: (reads.multiply(prob_success) + (1 - reads).multiply(prob_fail))
+                refs = ref_full_data[ref_data_columns[base]].rename(columns=rename_dict)
+
+                prob_n_for_base.update({base: (reads.multiply(refs).multiply(prob_success) +
+                                               (1 - reads.multiply(refs)).multiply(prob_fail))
                                        .multiply(posteriors, axis='index')})
-
-                # refs = ref_full_data[ref_data_columns[base]].rename(columns=rename_dict)
-
-                # prob_n_for_base.update({base: (reads.multiply(refs.multiply(prob_success)) +
-                #                                (1 - reads.multiply(refs)).multiply(prob_fail))
-                #                                .multiply(posteriors, axis='index')})
 
                 # Calculate P(Nk)for each region of the current reference:
                 prob_n_for_base[base][HeadersFormat.Region] = ref_full_data[HeadersFormat.Region]
@@ -875,6 +878,7 @@ class EmirgeIteration(object):
         # P(S|r) = P(r|S)P(s) / sum_i(P(r|Si)P(Si))
         posteriors[PosteriorsFormat.Posterior] = posteriors.apply(
             lambda r: r[PosteriorsFormat.Posterior] / r['denominator'] if r['denominator'] != 0 else 0, axis=1)
+
         posteriors = posteriors.fillna(0)
 
         posteriors = posteriors[[PosteriorsFormat.Posterior,
@@ -991,7 +995,7 @@ class EmirgeIteration(object):
                                                                                  CurrentStateFormat.Priors,
                                                                                  CurrentStateFormat.Region,
                                                                                  CurrentStateFormat.Weight]]
-        logging.info("References: {}".format(new_refs[CurrentStateFormat.Reference_id].drop_duplicates().tolist()))
+        logging.debug("References: {}".format(new_refs[CurrentStateFormat.Reference_id].drop_duplicates().tolist()))
         return new_refs
 
     def _get_new_posterior(self, max_prob_n_full_data, full_posteriors, reference_suffix):
@@ -1008,8 +1012,11 @@ class EmirgeIteration(object):
                                                                                    PosteriorsFormat.Read_id,
                                                                                    PosteriorsFormat.Ref_id]]
 
-        logging.info("Posteriors - References: {}".format(posteriors_df[PosteriorsFormat.Ref_id].drop_duplicates().tolist()))
+        logging.debug("Posteriors - References: {}".format(posteriors_df[PosteriorsFormat.Ref_id].drop_duplicates().tolist()))
         return posteriors_df.copy()
+
+
+
 
     @time_it
     def update_references(self, probN_dict):
@@ -1018,6 +1025,9 @@ class EmirgeIteration(object):
 
         # create table of the probabilities: the columns contains the the probablity of each base in each index - 0A, 0C, 0G, 0T, 1A, etc
         #                                    the rows are the references and the regions
+
+        # prob_n_3D = xr.DataArray(probN_dict)
+
         prob_n_ac = pd.merge(probN_dict[Base.A], probN_dict[Base.C], on=[HeadersFormat.Unique_Ref_id, HeadersFormat.Region], suffixes=(Base.A, Base.C))
         prob_n_gt = pd.merge(probN_dict[Base.G], probN_dict[Base.T], on=[HeadersFormat.Unique_Ref_id, HeadersFormat.Region], suffixes=(Base.G, Base.T))
         prob_n_full = pd.merge(prob_n_ac, prob_n_gt, on=[HeadersFormat.Unique_Ref_id, HeadersFormat.Region])
@@ -1040,13 +1050,16 @@ class EmirgeIteration(object):
 
             #  take the second best base, if the probability is larger than the the split threshold
             prob_n_full[['2-' + base_ix, base_ix]] = pd.DataFrame(np.sort(prob_n_for_ix.values)[:, -2:])
-            prob_n_full['2-' + base_ix] = prob_n_full['2-' + base_ix].apply(lambda r: r if r > self.th.min_minor_prob_for_split else 0)
+
+            prob_n_full['2-' + base_ix] = prob_n_full['2-' + base_ix].apply(
+                lambda r: r if r > self.th.min_minor_prob_for_split else 0)
 
             arank = prob_n_for_ix.apply(np.argsort, axis=1)
             argsort_dict = {0: 'A', 1: 'C', 2: 'G', 3: 'T'}
             prob_n_full[['2-base_' + base_ix, 'base_' + base_ix]] = arank[[2, 3]].applymap(lambda x: argsort_dict[x])
             # select best probability if the second is too low.
-            prob_n_full['2-base_' + base_ix] = prob_n_full.apply(lambda r: r['base_' + base_ix] if r['2-' + base_ix]==0 else r['2-base_' + base_ix], axis=1)
+            prob_n_full['2-base_' + base_ix] = prob_n_full.apply(
+                lambda r: r['base_' + base_ix] if r['2-' + base_ix] == 0 else r['2-base_' + base_ix], axis=1)
 
 
         prob_n_full['best_sequence'] = prob_n_full[bases_columns].apply(lambda r: "".join(r.tolist()), axis=1)
@@ -1065,8 +1078,7 @@ class EmirgeIteration(object):
         logging.info("NAN: minor = {}, Prior = {}, Weight = {}".format(max_prob_n_full_data['minor'].isnull().values.sum(),
                                                                        max_prob_n_full_data[CurrentStateFormat.Priors].isnull().values.sum(),
                                                                        max_prob_n_full_data[CurrentStateFormat.Weight].isnull().values.sum()))
-        max_prob_n_full_data['expected_coverage_minor'] = max_prob_n_full_data['minor'] * max_prob_n_full_data[CurrentStateFormat.Priors] * self.number_of_regions / max_prob_n_full_data[CurrentStateFormat.Weight]
-
+        max_prob_n_full_data['expected_coverage_minor'] = max_prob_n_full_data['minor'] * max_prob_n_full_data[CurrentStateFormat.Priors]* self.number_of_regions / max_prob_n_full_data[CurrentStateFormat.Weight]
         if self.allow_split and self.iteration_index > 0:
             # 1. The rate of changed bases in the split reference: (how many bases will change)/(length of read)
             # 2. The min rate to create a new split reference: (prior*minor) * (# of regions/ reference weight)
@@ -1287,6 +1299,7 @@ class EmirgeIteration(object):
                       CurrentStateFormat.Region,
                       CurrentStateFormat.Priors,
                       'Sequence']].to_csv(self.paths.final_results, index=False)
+            self.do_post_process()
             return True
 
 
@@ -1298,6 +1311,35 @@ class EmirgeIteration(object):
         new_reference_df =  self.update_references(prob_n_dict)
         is_stable = self.is_stable_state(new_reference_df)
         return is_stable
+
+
+    @time_it
+    def do_post_process(self):
+        """
+        For each sequence in the result find the best match in the DB
+        1. find the best match in the original bit format
+        2. find id's match in the dict file.
+        :return:
+        """
+        results_df = pd.DataFrame.from_csv(self.paths.final_results, index_col=None)
+        results_df['changed_reference_id'] = results_df[CurrentStateFormat.Reference_id]
+        results_df[CurrentStateFormat.Reference_id]=results_df[CurrentStateFormat.Reference_id].apply(lambda i: int(i))
+        logging.info("try to read csv: {}".format(self.paths.unique_ref_to_ref))
+        if os.path.exists(self.paths.unique_ref_to_ref):
+            logging.info("try to read csv: {}".format(self.paths.unique_ref_to_ref))
+        else:
+            logging.info("try to read csv: {} - file not exists".format(self.paths.unique_ref_to_ref))
+
+        ids_dict_df = pd.DataFrame.from_csv(self.paths.unique_ref_to_ref, index_col=None)
+        full_result = results_df.merge(ids_dict_df, on=CurrentStateFormat.Reference_id)
+        logging.info("Headers: ids_dict_df = {}, full_result={}".format(ids_dict_df.columns, full_result.columns))
+        full_result = full_result[[CurrentStateFormat.Reference_id,
+                                   ReferenceFormat.Original_Id,
+                                   'changed_reference_id',
+                                   CurrentStateFormat.Region,
+                                   CurrentStateFormat.Priors,
+                                   'Sequence']]
+        full_result.to_csv(self.paths.final_results, index=False)
 
 
 def get_matched_references(test):
@@ -1341,18 +1383,6 @@ def get_similar_references_and_region(similar_sequences):
                          rename(columns={CurrentStateFormat.Reference_id + "_y": CurrentStateFormat.Reference_id})])
     return ref_list
 
-
-def get_emirge_iteration():
-    data_path = "/home/vered/EMIRGE/EMIRGE-data/"
-    reads_fastq_path = data_path + "RDB53_CATTGACG_L007_R1_001.fastq"
-    reversed_reads_fastq_path = data_path + "RDB53_CATTGACG_L007_R2_001.fastq"
-    working_dir = data_path + "testing"
-    reference_path = working_dir + "/full_reference_db.csv"
-    fasta_path = data_path
-    read_len = 126
-    emirge_iteration = EmirgeIteration(working_dir, reads_fastq_path, reversed_reads_fastq_path,
-                                   fasta_path, read_len, reference_path=reference_path)
-    return emirge_iteration
 
 def get_emirge_iteration_mock():
     data_path = "/home/vered/EMIRGE/EMIRGE-data/mock_data/"

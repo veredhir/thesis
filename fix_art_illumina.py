@@ -81,6 +81,7 @@ def fix_fastq_using_fasta(ref_fasta_path, fastq1_path, fastq2_path,):
     fa_generator = SeqIO.parse(ref_fasta_path, "fasta")
     fa_record = fa_generator.next()
 
+    counter=0
     for fq1_record, fq2_record in zip(SeqIO.parse(fastq1_path, "fastq"), SeqIO.parse(fastq2_path, "fastq")):
         while not fa_record.id == fq1_record.id.partition('-')[0]:
             # print "fa = {}, fq1 = {}".format(fa_record.id , fq1_record.id.partition('-')[0])
@@ -88,6 +89,9 @@ def fix_fastq_using_fasta(ref_fasta_path, fastq1_path, fastq2_path,):
         fixed_records = fix_records(fq1_record, fq2_record, fa_record)
         fixed_fq1_records.append(fixed_records[0])
         fixed_fq2_records.append(fixed_records[1])
+        counter+=1
+
+    print "----------------\nReads length = {}\n".format(counter)
 
 
     SeqIO.write(fixed_fq1_records, fastq1_path, "fastq")

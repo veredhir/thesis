@@ -266,8 +266,8 @@ def main(argv = sys.argv[1:]):
         if current_o_value is not None:
             setattr(options, o, os.path.abspath(current_o_value))
 
-    # emirge_log_name = "/tmp/emirge_smurf.log"
-    emirge_log_name = None
+    emirge_log_name = "/tmp/emirge_smurf.log"
+    # emirge_log_name = None
 
     if options.debug is True:
         define_logger(logging.DEBUG, emirge_log_name)

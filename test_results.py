@@ -108,7 +108,9 @@ def compare_specific_reference(actual_res_path, expected_res_path, result_dir, t
 
         res_name = 'emirge_smurf_'+ test_name + '_reference_id_' + str(ref_expected_id) + '.png'
         im_path = os.path.join(result_dir, res_name)
-        plt.savefig(im_path)
+
+        plt.tight_layout()
+        plt.savefig(im_path, bbox_inches='tight')
         plt.clf()
         logging.info("saving results to: {}".format(im_path))
 
@@ -203,7 +205,7 @@ def present_compared_data(match_full_data_df, name, results_dir):
     presented_data['frequency difference'] = presented_data['frequency difference'].apply(lambda val: "{0:.2f}%".format(val * 100))
     presented_data.index = range(1, len(presented_data)) + ['sum']
 
-    ax = plt.subplot(111, frame_on=False)  # no visible frame
+    ax = plt.subplot(111, frame_on=False )  # no visible frame
     ax.xaxis.set_visible(False)  # hide the x axis
     ax.yaxis.set_visible(False)  # hide the y axis
 
@@ -211,8 +213,11 @@ def present_compared_data(match_full_data_df, name, results_dir):
     # table(ax, presented2, loc='center')
 
     res_name = name + '_emirge_smurf_compare.png'
+    plt.tight_layout()
+
     im_path = os.path.join(results_dir, res_name)
-    plt.savefig(im_path)
+
+    plt.savefig(im_path, bbox_inches='tight')
     plt.clf()
     logging.info("saved results to {}".format(im_path))
 
@@ -309,7 +314,9 @@ def main_compare_length():
 
         res_name = i + '_emirge_smurf_full_compare.png'
         # plt.show()
-        plt.savefig(os.path.join('/home/vered/EMIRGE/EMIRGE-data/', res_name))
+        plt.tight_layout()
+        plt.savefig(os.path.join('/home/vered/EMIRGE/EMIRGE-data/', res_name), bbox_inches='tight')
+
         plt.clf()
         fig.clear()
 

@@ -1,7 +1,7 @@
 from seqBIn import Base
 
 class HeadersFormat:
-    Group_id = 'Reads_group_id'  # todo: change to reads_group_id
+    Group_id = 'Reads_group_id'
     Region = 'Region'
     Quals = 'Quals'
     Count = 'Count'
