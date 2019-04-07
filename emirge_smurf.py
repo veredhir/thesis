@@ -113,8 +113,8 @@ class EM(object):
 
             # we only need the first iteration and the current one.
             # once we used the previous iteration to initialize the current one, we don't need the data any more.
-            if i > 1 and not self.is_debug:
-                shutil.rmtree(subdirs[i - 1])
+            if i > 2 and not self.is_debug:
+                shutil.rmtree(subdirs[i - 2])
 
             if curr_emirge_iteration.do_iteration():
                 # stable state

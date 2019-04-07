@@ -79,7 +79,11 @@ class EmirgePaths():
         self.unique_ref_to_ref = ""
         self.posteriors = os.path.join(working_dir, "posteriors.csv")
         self.read_quals = os.path.join(working_dir, "reads_db.csv")
-
+        self.prob_n = {Base.A: os.path.join(working_dir, "prob_A.csv"),
+                       Base.C: os.path.join(working_dir, "prob_C.csv"),
+                       Base.G: os.path.join(working_dir, "prob_G.csv"),
+                       Base.T: os.path.join(working_dir, "prob_T.csv")}
+        self.prev_prob_n = {}
 
 class EmirgeIteration(object):
 
@@ -193,6 +197,7 @@ class EmirgeIteration(object):
         self.allow_split = prev_emirge_iteration.allow_split
         self.read_len = prev_emirge_iteration.read_len
         self.paths.read_quals = prev_emirge_iteration.paths.read_quals
+        self.paths.prev_prob_n = prev_emirge_iteration.paths.prob_n
         self.paths.unique_ref_to_ref = prev_emirge_iteration.paths.unique_ref_to_ref
         self.th = prev_emirge_iteration.th
         curr_state_df = pd.DataFrame.from_csv(prev_emirge_iteration.paths.current_state, index_col=None)
@@ -642,9 +647,22 @@ class EmirgeIteration(object):
         current_state_df, mapping_df, reads_df, posteriors_df = self.get_dfs_for_calc_probN(bases)
         logging.info("length of dataframes: reads = {}, mapping = {}, current_state_df = {}"
                      .format(len(reads_df), len(mapping_df), len(current_state_df)))
-        reads_data_columns, ref_data_columns, prob_success_data_columns, prob_failure_data_columns, rename_dict = self.get_columns_for_calc_probN(bases)
+        reads_data_columns, ref_data_columns, prob_success_data_columns, prob_failure_data_columns, rename_dict, prev_prob_n_columns = self.get_columns_for_calc_probN(bases)
 
-        prob_n_full_dict = {Base.A:[], Base.C:[], Base.G:[], Base.T:[]}
+
+        if self.iteration_index > 0:
+            print("read data from {}".format(self.paths.prob_n[Base.A]))
+            prev_prob_n_full_dict = {Base.A: pd.DataFrame.from_csv(self.paths.prev_prob_n[Base.A], index_col=None),
+                                     Base.C: pd.DataFrame.from_csv(self.paths.prev_prob_n[Base.C], index_col=None),
+                                     Base.G: pd.DataFrame.from_csv(self.paths.prev_prob_n[Base.G], index_col=None),
+                                     Base.T: pd.DataFrame.from_csv(self.paths.prev_prob_n[Base.T], index_col=None)}
+        else:
+            prev_prob_n_full_dict = {}
+            for base in bases:
+                prob_n_cols = [HeadersFormat.Region, MappingForamt.Ref_id] + prev_prob_n_columns[base]
+                prev_prob_n_full_dict[base] = pd.DataFrame(columns = prob_n_cols)
+
+        prob_n_full_dict = {Base.A: [], Base.C: [], Base.G: [], Base.T: []}
         mapping_grouped_by_ref = mapping_df.groupby(CurrentStateFormat.Reference_id)
 
         for ref_group_id, mapping_ref_df in mapping_grouped_by_ref:
@@ -657,6 +675,14 @@ class EmirgeIteration(object):
             if posteriors_df is not None:
                 ref_full_data = ref_full_data.merge(posteriors_df, on = [ReadsFullDataFormat.Id, CurrentStateFormat.Reference_id], how='left')
                 # logging.info("len of merge of all df = {}, len(posteriors) = {}".format(len(ref_full_data), len(posteriors_df)))
+
+
+            logging.info("************\n")
+            logging.info("************\n")
+            memory_usage = ref_full_data.memory_usage(index=True, deep=True)
+            logging.info("Memory usage: {}\nsum={}".format(ref_full_data.info(), memory_usage.sum()))
+            logging.info("************\n")
+            logging.info("************\n")
 
             prob_n_for_base = {}
             prob_success = ref_full_data[prob_success_data_columns].copy()
@@ -671,10 +697,28 @@ class EmirgeIteration(object):
                 posteriors = ref_full_data[HeadersFormat.Posterior]
 
             for base in bases:
+                ref_full_data = ref_full_data.merge(prev_prob_n_full_dict[base],
+                                                    on=[CurrentStateFormat.Reference_id, CurrentStateFormat.Region],
+                                                    how='left')
+                ref_full_data.fillna(value=1, inplace=True)
+                print(ref_full_data.columns)
+                prev_prob_n = ref_full_data[prev_prob_n_columns[base]].rename(columns=rename_dict)
+
                 reads = ref_full_data[reads_data_columns[base]].rename(columns=rename_dict)
+
+                # calculate Pr(n_jk|b_ik)Pr(n_jk) where j in bacteria, i is read and k is the base index:
+                prob_n_for_base.update({base: (reads.multiply(prob_success) + (1 - reads).multiply(prob_fail)).multiply(prev_prob_n)})
+
+            # calculate Pr(b_ik): sum_{A, C, G, T}[Pr(n_jk|b_ik)Pr(n_jk)] (for each k, i, j)
+            prob_read_bases = prob_n_for_base[Base.A] + prob_n_for_base[Base.C] + prob_n_for_base[Base.G] + prob_n_for_base[Base.T]
+
+            for base in bases:
                 # for each base we calculate P(nk = base):
-                prob_n_for_base.update({base: (reads.multiply(prob_success) + (1 - reads).multiply(prob_fail))
-                                       .multiply(posteriors, axis='index')})
+
+                # calculate Pr(b_ik|n_jk)
+                prob_n_for_base[base] = prob_n_for_base[base] / prob_read_bases
+
+                prob_n_for_base[base] = prob_n_for_base[base].multiply(posteriors, axis='index')
 
                 # Calculate P(Nk)for each region of the current reference:
                 prob_n_for_base[base][HeadersFormat.Region] = ref_full_data[HeadersFormat.Region]
@@ -691,8 +735,14 @@ class EmirgeIteration(object):
 
 
         for base in bases:
+            base_rename_dict = {}
+            for i in range(2 * self.read_len):
+                base_rename_dict[str(i)] = str(i) + base + "_prob_n"
             prob_n_full_dict[base] = pd.concat(prob_n_full_dict[base], ignore_index=True)
-            # prob_n_full_dict[base].to_csv("/tmp/prob_" + base + ".csv", index=False)
+
+            prob_n_for_next_itr = prob_n_full_dict[base].rename(columns=base_rename_dict)
+            print("saved data to {}".format(self.paths.prob_n[base]))
+            prob_n_for_next_itr.to_csv(self.paths.prob_n[base], index=False)
 
         return prob_n_full_dict
 
@@ -760,6 +810,7 @@ class EmirgeIteration(object):
 
         reads_data_columns = {Base.A: [], Base.C: [], Base.G: [], Base.T: []}
         ref_data_columns = {Base.A: [], Base.C: [], Base.G: [], Base.T: []}
+        prev_prob_n_columns = {Base.A: [], Base.C: [], Base.G: [], Base.T: []}
         prob_success_data_columns = []
         prob_failure_data_columns = []
         rename_dict = {}
@@ -768,12 +819,13 @@ class EmirgeIteration(object):
             for base in bases:
                 reads_data_columns[base] += [str(i) + base + "_read"]
                 ref_data_columns[base] += [str(i) + base + "_ref"]
-                rename_dict.update({str(i) + base + "_read": str(i), str(i) + base + "_ref": str(i)})
+                prev_prob_n_columns[base] += [str(i) + base + "_prob_n"]
+                rename_dict.update({str(i) + base + "_read": str(i), str(i) + base + "_ref": str(i), str(i) + base + "_prob_n": str(i)})
             prob_success_data_columns += [str(i) + "_prob_success"]
             prob_failure_data_columns += [str(i) + "_prob_fail"]
             rename_dict.update({str(i) + "_prob_success": str(i), str(i) + "_prob_fail": str(i)})
 
-        return reads_data_columns, ref_data_columns, prob_success_data_columns, prob_failure_data_columns, rename_dict
+        return reads_data_columns, ref_data_columns, prob_success_data_columns, prob_failure_data_columns, rename_dict, prev_prob_n_columns
 
     def get_columns_for_calc_likelihoods(self, bases):
 
